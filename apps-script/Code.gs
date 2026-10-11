@@ -7,6 +7,9 @@ const PUBLISHED_TEAM_PAGES_TAB = "Published Team Pages";
 const FEATURE_REQUESTS_TAB = "Feature Requests";
 const TEAM_EDITOR_PINS_TAB = "Team Editor PINs";
 const MATCH_POLLS_TAB = "Match Polls";
+const COMPETITION_SETTINGS_TAB = "Competition Settings";
+const MIN_GAMES_PER_TEAM = 3;
+const MAX_GAMES_PER_TEAM = 32;
 const MATCH_POLL_HEADERS = ["Match ID", "Team ID", "Voter Token Hash", "Submitted At"];
 const TEAM_EDITOR_PIN_HEADERS = ["Team ID", "PIN", "Updated At"];
 const TEAM_IDS = ["A", "B", "C", "D", "E"];
@@ -45,10 +48,12 @@ function doGet(e) {
           properties.getProperty("SPREADSHEET_ID") &&
           properties.getProperty("ADMIN_TOKEN")
         ),
-        actions: ["health", "getTeamSettings", "getTeamEditorPinStatus", "verifyTeamEditorPin", "updateTeamEditorPin", "getTeamPageDesign", "saveTeamPageDesign", "getPublishedTeamPage", "publishTeamPage", "revertTeamPage", "submitFeatureRequest", "getMatchPolls", "submitMatchVote"]
+        actions: ["health", "getTeamSettings", "getCompetitionSettings", "updateCompetitionSettings", "getTeamEditorPinStatus", "verifyTeamEditorPin", "updateTeamEditorPin", "getTeamPageDesign", "saveTeamPageDesign", "getPublishedTeamPage", "publishTeamPage", "revertTeamPage", "submitFeatureRequest", "getMatchPolls", "submitMatchVote"]
       };
     } else if (action === "getMatchPolls") {
       result = { ok: true, service: SERVICE_NAME, apiVersion: API_VERSION, action: action, polls: readMatchPolls_() };
+    } else if (action === "getCompetitionSettings") {
+      result = readCompetitionSettings_();
     } else if (action === "getTeamSettings") {
       result = {
         ok: true,
@@ -122,7 +127,7 @@ function doPost(e) {
     });
   }
 
-  if (!["updateTeamSettings", "updateTeamEditorPin", "saveTeamPageDesign", "publishTeamPage", "revertTeamPage", "submitFeatureRequest", "submitMatchVote"].includes(body.action)) {
+  if (!["updateTeamSettings", "updateCompetitionSettings", "updateTeamEditorPin", "saveTeamPageDesign", "publishTeamPage", "revertTeamPage", "submitFeatureRequest", "submitMatchVote"].includes(body.action)) {
     return jsonResponse_({
       ok: false,
       service: SERVICE_NAME,
@@ -148,6 +153,8 @@ function doPost(e) {
       error: "Not authorised"
     });
   }
+
+  if (body.action === "updateCompetitionSettings") return updateCompetitionSettings_(body);
 
   if (body.action === "updateTeamEditorPin") {
     const teamId = String(body.teamId || "").trim().toUpperCase();
@@ -234,6 +241,53 @@ function doPost(e) {
       service: SERVICE_NAME,
       error: "Could not save team settings. Check Apps Script execution logs."
     });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+
+/**
+ * The shared competition length lives only in Competition Settings!B2.
+ * Reads are public; writes require the configured admin token.
+ */
+function readCompetitionSettings_() {
+  const spreadsheetId = PropertiesService.getScriptProperties().getProperty("SPREADSHEET_ID");
+  if (!spreadsheetId) throw new Error("Missing SPREADSHEET_ID script property");
+  const spreadsheet = SpreadsheetApp.openById(spreadsheetId);
+  const sheet = spreadsheet.getSheetByName(COMPETITION_SETTINGS_TAB);
+  if (!sheet) throw new Error('Missing "' + COMPETITION_SETTINGS_TAB + '" sheet');
+  const raw = sheet.getRange("B2").getValue();
+  const gamesPerTeam = Number(raw);
+  if (!Number.isInteger(gamesPerTeam) || gamesPerTeam < MIN_GAMES_PER_TEAM || gamesPerTeam > MAX_GAMES_PER_TEAM) {
+    return { ok: false, service: SERVICE_NAME, apiVersion: API_VERSION, action: "getCompetitionSettings", error: "Competition Settings!B2 must contain a whole number from " + MIN_GAMES_PER_TEAM + " to " + MAX_GAMES_PER_TEAM + "." };
+  }
+  return { ok: true, service: SERVICE_NAME, apiVersion: API_VERSION, action: "getCompetitionSettings", gamesPerTeam: gamesPerTeam };
+}
+
+function updateCompetitionSettings_(body) {
+  const raw = body.gamesPerTeam;
+  const gamesPerTeam = Number(raw);
+  if (raw === "" || raw === null || raw === undefined || !Number.isInteger(gamesPerTeam) ||
+      gamesPerTeam < MIN_GAMES_PER_TEAM || gamesPerTeam > MAX_GAMES_PER_TEAM) {
+    return jsonResponse_({ ok: false, service: SERVICE_NAME, apiVersion: API_VERSION, action: "updateCompetitionSettings", error: "gamesPerTeam must be a whole number from " + MIN_GAMES_PER_TEAM + " to " + MAX_GAMES_PER_TEAM + "." });
+  }
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) return jsonResponse_({ ok: false, service: SERVICE_NAME, error: "Service busy. Try again." });
+  try {
+    const spreadsheetId = PropertiesService.getScriptProperties().getProperty("SPREADSHEET_ID");
+    if (!spreadsheetId) throw new Error("Missing SPREADSHEET_ID script property");
+    const spreadsheet = SpreadsheetApp.openById(spreadsheetId);
+    const sheet = spreadsheet.getSheetByName(COMPETITION_SETTINGS_TAB);
+    if (!sheet) throw new Error('Missing "' + COMPETITION_SETTINGS_TAB + '" sheet');
+    sheet.getRange("B2").setValue(gamesPerTeam);
+    SpreadsheetApp.flush();
+    const saved = Number(sheet.getRange("B2").getValue());
+    if (saved !== gamesPerTeam) throw new Error("The setting did not read back as the requested value.");
+    return jsonResponse_({ ok: true, service: SERVICE_NAME, apiVersion: API_VERSION, action: "updateCompetitionSettings", saved: true, gamesPerTeam: saved });
+  } catch (error) {
+    console.error(error);
+    return jsonResponse_({ ok: false, service: SERVICE_NAME, action: "updateCompetitionSettings", error: "Could not save the shared season length. Check Apps Script configuration and execution logs." });
   } finally {
     lock.releaseLock();
   }
