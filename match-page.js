@@ -74,7 +74,16 @@ function matchScore(g){return isPlayed(g)?{home:Number(scores[g.id].home),away:N
 function matchWinner(g){const s=matchScore(g);return !s?"":s.home>s.away?g.home:s.away>s.home?g.away:"Draw"}
 function teamResult(g,t){const s=matchScore(g);if(!s)return "";const a=g.home===t?s.home:s.away,b=g.home===t?s.away:s.home;return a>b?"W":a<b?"L":"D"}
 function matchElo(g){return calculateElo().rows.find(r=>Number(r.game)===Number(g.id))||null}
-function recentMatches(t){return getActiveRegularGames().filter(g=>isPlayed(g)&&(g.home===t||g.away===t)).sort((a,b)=>Number(b.id)-Number(a.id)).slice(0,5).reverse()}
+function recentMatches(t,currentGame){
+ const all=getActiveRegularGames();
+ const currentIndex=all.findIndex(g=>Number(g.id)===Number(currentGame?.id));
+ // Only use games scheduled up to and including this match. For finals or
+ // matches outside the regular-season list, all regular-season results qualify.
+ const eligible=currentIndex<0?all:all.slice(0,currentIndex+1);
+ return eligible
+  .filter(g=>isPlayed(g)&&(g.home===t||g.away===t))
+  .slice(-5);
+}
 function formMarkup(t,list){
  if(!list.length)return '<div class="match-muted">No completed matches recorded.</div>';
  return '<div class="match-form-list">'+list.map(g=>'<button class="match-form-chip '+(teamResult(g,t)==="W"?"form-win":teamResult(g,t)==="L"?"form-loss":"form-draw")+'" onclick="openMatchDetail('+Number(g.id)+')" type="button"><b>'+teamResult(g,t)+'</b><small>G'+Number(g.id)+'</small></button>').join("")+'</div>';
@@ -97,7 +106,7 @@ function renderMatchDetail(id){
  const s=matchScore(g),w=matchWinner(g),e=matchElo(g),home=getTeamDisplayName(g.home||"TBD"),away=getTeamDisplayName(g.away||"TBD");
  const meetings=getActiveRegularGames().filter(x=>isPlayed(x)&&((x.home===g.home&&x.away===g.away)||(x.home===g.away&&x.away===g.home))).sort((a,b)=>Number(a.id)-Number(b.id));
  let hw=0,aw=0,d=0;meetings.forEach(x=>{const z=matchWinner(x);if(z==="Draw")d++;else if(z===g.home)hw++;else if(z===g.away)aw++});
- const recentH=recentMatches(g.home),recentA=recentMatches(g.away),hc=s&&e?e.changeA:null,ac=s&&e?e.changeB:null;
+ const recentH=recentMatches(g.home,g),recentA=recentMatches(g.away,g),hc=s&&e?e.changeA:null,ac=s&&e?e.changeB:null;
  const ch=v=>v===null?"Pending":(v>0?"+":"")+v.toFixed(2);
  const history=meetings.slice(-4).reverse().map(x=>{const z=matchScore(x),win=matchWinner(x);return '<button onclick="openMatchDetail('+Number(x.id)+')" type="button"><span>GAME '+Number(x.id)+'</span><b>'+z.home+' – '+z.away+'</b><small>'+(win==="Draw"?"DRAW":escapeHTML(getTeamDisplayName(win))+" WON")+'</small></button>'}).join("");
  page.innerHTML='<div class="match-detail-topline"><button id="matchBack" class="match-back-button">‹ ALL MATCHES</button><span class="match-detail-status '+(s?"match-status-played":"match-status-upcoming")+'">'+(s?(w==="Draw"?"MATCH DRAWN":"MATCH COMPLETE"):"AWAITING RESULT")+'</span></div>'+
